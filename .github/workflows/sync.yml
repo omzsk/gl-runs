@@ -1,0 +1,67 @@
+name: GitLab Repository Backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 */6 * * *' # Every 6 hours, UTC.
+
+permissions:
+  contents: read
+
+# Avoid overlapping whole-backup runs.
+concurrency:
+  group: gitlab-mirror-all
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.repos.outputs.matrix }}
+    steps:
+      - name: Checkout repository list and scripts
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read and validate repos
+        id: repos
+        run: python3 scripts/parse_repos.py repos
+
+  mirror:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    name: ${{ matrix.target }}
+    env:
+      SOURCE_URL: ${{ matrix.source }}
+      DEST_PATH: ${{ vars.GITLAB_NAMESPACE }}/${{ matrix.target }}
+      GITLAB_HOST: ${{ vars.GITLAB_HOST || 'gitlab.com' }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      WITH_LFS: ${{ matrix.lfs }}
+      WITH_WIKI: ${{ matrix.wiki }}
+      WITH_WIKI_LFS: ${{ matrix.wiki_lfs }}
+      CREATE_PRIVATE: ${{ matrix.private }}
+
+    steps:
+      - name: Checkout workflow scripts
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Git LFS if needed
+        if: ${{ matrix.lfs || (matrix.wiki && matrix.wiki_lfs) }}
+        shell: bash
+        run: |
+          if ! git lfs version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git-lfs
+          fi
+
+      - name: Sync repository, Wiki, and LFS (one-way)
+        shell: bash
+        run: bash scripts/sync-repo.sh
