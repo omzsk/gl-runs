@@ -39,6 +39,11 @@ https://github.com/soranerai/vpnhide_next.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/CHIZI-0618/AndroidTProxyShell.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/CHIZI-0618/box4magisk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/Fanju6/NetProxy-Magisk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/Asterisk4Magisk/AsteriskNG.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/Asterisk4Magisk/asteriskd.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/Asterisk4Magisk/bpf2socks.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/Asterisk4Magisk/bpfmatcher.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/Asterisk4Magisk/AsteriskEnhance.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
 # SOCKS PROJECTS
 https://github.com/heiher/sockstun.git#wiki=1|lfs=1|wiki_lfs=1|private=1
