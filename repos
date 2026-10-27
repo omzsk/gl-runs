@@ -1,1 +1,69 @@
-https://github.com/VD171/COPG-VD.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+# Mirror sources. Lines beginning with # are comments.
+# URL#wiki=0|1|lfs=0|1|wiki_lfs=0|1|private=0|1
+# Target name is REPO_<source username>.
+
+# KERNELSU
+https://github.com/tiann/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/5ec1cff/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/backslashxx/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/KOWX712/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/JingMatrix/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+
+https://github.com/KernelSU2/rustix.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/5ec1cff/resetprop-rs.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/5ec1cff/android_bootimg.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+
+https://github.com/JingMatrix/NeoZygisk.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/JingMatrix/TEESimulator.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/JingMatrix/Vector.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+
+https://github.com/KOWX712/PlayIntegrityFix.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+
+https://github.com/PerformanC/ReZygisk.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+
+https://github.com/eltavine/Duck-Detector-Refactoring.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/eltavine/Duck-ToolBox.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+
+https://github.com/JingMatrix/LSPatch.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/JingMatrix/LSPlant.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+
+# MODULES
+https://github.com/Seyud/device_faker.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/Seyud/device_faker_config.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/GJR787878/DeviceResetSpoofer.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/BuSung-dev/SpoofMyDevice.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/BuSung-dev/SpoofMyDevice_Devices.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/okhsunrog/vpnhide.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/soranerai/vpnhide_next.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/CHIZI-0618/AndroidTProxyShell.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/CHIZI-0618/box4magisk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+
+# SOCKS PROJECTS
+https://github.com/heiher/sockstun.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/heiher/hev-socks5-tunnel.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/heiher/hev-socks5-tproxy.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/heiher/hev-socks5-core.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/heiher/hev-socks5-server.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+
+# OTHERS
+https://github.com/R0rt1z2/kaeru.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/shomykohai/mtk-payloads.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/shomykohai/penumbra.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/bkerler/mtkclient.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://git.kaerulabs.com/shomy/preloader-mtk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/shomykohai/hacc.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/miner7222/LTBox.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+
+# UTILS
+https://github.com/ja7ad/hydra.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/yunheshiguang/yunheshiguang-droid.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+
+# ROOT
+https://github.com/NebuSec/CyberMeowfia.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/JoinChang/ghostlock-oneplus.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/diabl0w/DFRoot.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/x-spy/CVE-2026-43499-popsicle.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/BuSung-dev/Root-My-Galaxy.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/quyicheng03-boop/xiaomi15-dada-cve-2026-64560.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/YuKongA/ghostlock-app.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/LSPosed/LSPromise.git#wiki=1|lfs=1|wiki_lfs=1|private=1

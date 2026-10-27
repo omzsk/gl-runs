@@ -1,4 +1,4 @@
-name: GitLab Repository Backup
+name: OZ Backup → GitLab
 
 on:
   workflow_dispatch:
