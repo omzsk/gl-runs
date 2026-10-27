@@ -3,23 +3,24 @@
 # Target name is REPO_<source username>.
 
 # KERNELSU
-https://github.com/tiann/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
-https://github.com/5ec1cff/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
-https://github.com/backslashxx/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
-https://github.com/KOWX712/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
-https://github.com/JingMatrix/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/tiann/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/5ec1cff/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/backslashxx/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/KOWX712/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/JingMatrix/KernelSU.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/fixz232/Pseudo-SterSU.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
 https://github.com/KernelSU2/rustix.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/5ec1cff/resetprop-rs.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/5ec1cff/android_bootimg.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
-https://github.com/JingMatrix/NeoZygisk.git#wiki=1|lfs=1|wiki_lfs=1|private=0
-https://github.com/JingMatrix/TEESimulator.git#wiki=1|lfs=1|wiki_lfs=1|private=0
-https://github.com/JingMatrix/Vector.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/JingMatrix/NeoZygisk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/JingMatrix/TEESimulator.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/JingMatrix/Vector.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
 https://github.com/KOWX712/PlayIntegrityFix.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
-https://github.com/PerformanC/ReZygisk.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/PerformanC/ReZygisk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
 https://github.com/eltavine/Duck-Detector-Refactoring.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/eltavine/Duck-ToolBox.git#wiki=1|lfs=1|wiki_lfs=1|private=1
@@ -37,6 +38,7 @@ https://github.com/okhsunrog/vpnhide.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/soranerai/vpnhide_next.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/CHIZI-0618/AndroidTProxyShell.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/CHIZI-0618/box4magisk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/Fanju6/NetProxy-Magisk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
 # SOCKS PROJECTS
 https://github.com/heiher/sockstun.git#wiki=1|lfs=1|wiki_lfs=1|private=1
@@ -47,6 +49,9 @@ https://github.com/heiher/hev-socks5-server.git#wiki=1|lfs=1|wiki_lfs=1|private=
 
 # OTHERS
 https://github.com/R0rt1z2/kaeru.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/R0rt1z2/fenrir.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/R0rt1z2/lkpatcher.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/R0rt1z2/liblk.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/shomykohai/mtk-payloads.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/shomykohai/penumbra.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/bkerler/mtkclient.git#wiki=1|lfs=1|wiki_lfs=1|private=1
@@ -55,7 +60,8 @@ https://github.com/shomykohai/hacc.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/miner7222/LTBox.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 
 # UTILS
-https://github.com/ja7ad/hydra.git#wiki=1|lfs=1|wiki_lfs=1|private=0
+https://github.com/ja7ad/hydra.git#wiki=1|lfs=1|wiki_lfs=1|private=1
+https://github.com/zerx-lab/FluxDown.git#wiki=1|lfs=1|wiki_lfs=1|private=1
 https://github.com/yunheshiguang/yunheshiguang-droid.git#wiki=1|lfs=1|wiki_lfs=1|private=0
 
 # ROOT
