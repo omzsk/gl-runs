@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       # Rate-limit friendly: one GitLab-token-using job at a time.
-      max-parallel: 1
+      max-parallel: 3
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     name: ${{ matrix.target }}
