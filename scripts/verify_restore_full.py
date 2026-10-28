@@ -249,18 +249,32 @@ def wiki_url(repo_url):
 
 
 def wiki_exists(url, is_source):
-    """Return False only for an unambiguous Git 'repo not found'; else fail closed."""
-    p = git('ls-remote', '--heads', url, check=False)
+    """Probe Wiki: True=has heads, False=confirmed absent, None=access ambiguous.
+
+    A GitHub public repo can have no initialized Wiki even when wiki=1.
+    Git then prompts for credentials; the GitLab-only askpass correctly declines.
+    This prompt alone cannot prove that the wiki is missing, so report unknown
+    instead of marking the repository data corrupt or inventing a Wiki PASS.
+    """
+    env = os.environ.copy()
+    if is_source and urlsplit(url).hostname == 'github.com':
+        # Never invoke a GitLab-only credential helper for public GitHub URLs.
+        env.pop('GIT_ASKPASS', None)
+        env.pop('SSH_ASKPASS', None)
+        env.pop('GITLAB_TOKEN', None)
+        env['GIT_TERMINAL_PROMPT'] = '0'
+    p = git('ls-remote', '--heads', url, check=False, env=env)
     if p.returncode == 0:
         return bool(p.stdout.strip())
     stderr = p.stderr.lower()
-    if 'repository not found' in stderr or 'not found' in stderr or '404' in stderr:
-        # GitHub can report hidden private wikis as 404. Treat as unknown
-        # rather than claim absence when source repo itself may be private.
-        if is_source:
-            return False
+    if any(t in stderr for t in TRANSIENT) or '403' in stderr or 'access denied' in stderr:
+        raise VerificationError('Wiki gặp giới hạn truy cập hoặc lỗi mạng: ' + p.stderr.strip()[-250:])
+    if any(t in stderr for t in ('repository not found', 'not found', '404')):
         return False
-    raise VerificationError(f'Không truy cập được Wiki: {p.stderr.strip()[-300:]}')
+    if any(t in stderr for t in ('could not read username', 'unable to read askpass',
+                                 'authentication failed', '401')):
+        return None
+    raise VerificationError('Không xác định được trạng thái Wiki: ' + p.stderr.strip()[-250:])
 
 
 def one_kind(source_url, dest_url, work, kind, with_lfs, is_wiki=False):
@@ -324,7 +338,7 @@ def short_oid(oid):
 
 
 def glyph(status):
-    return {'ĐẠT': '✅', 'KHÔNG CÓ': '⏭️', 'BỎ QUA': '⏭️',
+    return {'ĐẠT': '✅', 'ĐẠT SOURCE CODE': '✅', 'KHÔNG CÓ': '⏭️', 'BỎ QUA': '⏭️',
             'CHƯA ĐỒNG BỘ': '⚠️', 'LỆCH REFS': '❌',
             'THIẾU LFS': '❌', 'LỖI DỮ LIỆU': '🚨',
             'CHƯA XÁC MINH': '❔'}.get(status, '❌')
@@ -429,9 +443,11 @@ def render_summary(report):
              section_brief(wiki, 'Wiki'),
              *([lfs_brief(wiki, 'Wiki LFS')] if wiki.get('status') == 'ĐẠT' else []),
              f'- **Kết luận:** {glyph(status)} **{status}** — '
-             + ('Các hạng mục trong phạm vi đã kiểm tra đều đạt.' if status == 'ĐẠT' else 'Chưa thể kết luận backup đã khớp đầy đủ.'), '',
+             + ('Các hạng mục trong phạm vi đã kiểm tra đều đạt.' if status == 'ĐẠT'
+                else 'Git và LFS của source code đã đạt; Wiki chưa thể xác minh, không được coi là Wiki PASS.'
+                if status == 'ĐẠT SOURCE CODE' else 'Chưa thể kết luận backup đã khớp đầy đủ.'), '',
              f'**Bắt đầu kiểm tra (UTC):** `{safe_md(report.get("time_utc", "—"))}`', '']
-    if status != 'ĐẠT':
+    if status not in ('ĐẠT',):
         for name, sect in [('Repository', repo), ('Wiki', wiki)]:
             lines.extend(render_diagnostics(sect, name))
     lines += ['> **Lưu ý:** `CHƯA ĐỒNG BỘ` không đồng nghĩa corrupt. '
@@ -456,6 +472,7 @@ def main():
               'repository': {'status': 'CHƯA XÁC MINH'},
               'wiki': {'status': 'CHƯA XÁC MINH'}, 'status': 'CHƯA XÁC MINH'}
     ok = True
+    wiki_inconclusive = False
     try:
         # Validate URLs. Local paths are allowed only for offline self-tests.
         for url in (args.source, args.destination):
@@ -476,11 +493,30 @@ def main():
                     try:
                         found_source = wiki_exists(source, True)
                         found_dest = wiki_exists(dest, False)
-                        if not found_source and not found_dest:
-                            report['wiki'] = {'status': 'KHÔNG CÓ', 'note': 'Không phát hiện nhánh Wiki ở hai bên.'}
+                        if found_source is False and found_dest is False:
+                            report['wiki'] = {'status': 'KHÔNG CÓ', 'note': 'Không phát hiện Wiki ở nguồn và đích.'}
                             continue
-                        if not found_source or not found_dest:
-                            raise VerificationError('Wiki chỉ có ở một phía hoặc không thể đọc; không giống nhau.')
+                        if found_source is True and found_dest is True:
+                            pass  # Both have Wiki refs: verify their Git objects and LFS below.
+                        elif found_source is True and found_dest is not True:
+                            raise VerificationError('GitHub có Wiki nhưng GitLab thiếu Wiki hoặc không truy cập được.')
+                        elif found_source is False and found_dest is True:
+                            raise VerificationError('GitLab có Wiki nhưng GitHub không có; Wiki hai bên khác nhau.')
+                        elif found_source is None and found_dest is True:
+                            raise VerificationError('GitLab có Wiki nhưng không xác minh được trạng thái Wiki GitHub.')
+                        else:
+                            # No confirmed source Wiki. Do not fail code integrity only
+                            # because GitHub requests auth for an uninitialized Wiki.
+                            # Still warn and make it explicit that Wiki is NOT verified.
+                            wiki_inconclusive = True
+                            report['wiki'] = {
+                                'status': 'CHƯA XÁC MINH',
+                                'stage': 'Phát hiện Wiki',
+                                'error': ('Không thể xác định chắc chắn Wiki có tồn tại. '
+                                          'GitHub có thể chưa tạo trang Wiki đầu tiên hoặc đang yêu cầu xác thực. '
+                                          'Source code và LFS vẫn được kiểm tra độc lập.'),
+                                'note': 'Không xác nhận Wiki PASS; không coi đây là lỗi corrupt của source code.'}
+                            continue
                     except Exception as e:
                         report['wiki'] = {'status': 'CHƯA XÁC MINH', 'error': str(e)}
                         ok = False
@@ -528,7 +564,7 @@ def main():
         report['wiki'] = {'status': 'CHƯA XÁC MINH', 'error': 'Không thể chạy đầy đủ do lỗi thiết lập.'}
     statuses = {report['repository'].get('status'), report['wiki'].get('status')}
     if ok:
-        report['status'] = 'ĐẠT'
+        report['status'] = 'ĐẠT SOURCE CODE' if wiki_inconclusive else 'ĐẠT'
     elif 'LỖI DỮ LIỆU' in statuses:
         report['status'] = 'LỖI DỮ LIỆU'
     elif 'THIẾU LFS' in statuses:

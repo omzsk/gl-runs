@@ -69,7 +69,7 @@ def make_summary(selected, jobs, prepare_status, verify_status, api_error=None):
             state = '❔ CHƯA XÁC MINH'
             n_unknown += 1
         elif job.get('conclusion') == 'success':
-            state = '✅ ĐẠT'
+            state = '✅ JOB PASS (xem Summary Wiki)'
             n_pass += 1
         else:
             state = '❌ CHƯA ĐẠT (xem Summary của job)'
@@ -81,7 +81,7 @@ def make_summary(selected, jobs, prepare_status, verify_status, api_error=None):
         else:
             link = 'Xem danh sách jobs bên trên'
         table.append(f'| `{md(name)}` | {state} | {link} |')
-    lines += [f'- **ĐÃ ĐẠT:** {n_pass}/{len(selected)} repository',
+    lines += [f'- **Job PASS:** {n_pass}/{len(selected)} repository (có thể chỉ ĐẠT SOURCE CODE nếu Wiki chưa xác minh)',
               f'- **Chưa đạt:** {n_fail} repository',
               f'- **Chưa xác minh được trạng thái job:** {n_unknown}',
               f'- **Chuẩn bị:** `{md(prepare_status)}`; **Kiểm tra:** `{md(verify_status)}`.', '']
@@ -89,7 +89,7 @@ def make_summary(selected, jobs, prepare_status, verify_status, api_error=None):
         lines += [f'**Cảnh báo:** {md(api_error)}', '']
     lines += table + ['',
               '> **Xem lỗi chi tiết:** mở Summary của job `Restore <tên repo>` để xem trạng thái '
-              'Repository, LFS, Wiki, SHA và OID. Bảng trên chỉ đọc trạng thái job, '
+              'Repository, LFS, Wiki, SHA và OID. Job PASS không nhất thiết là Wiki PASS. Bảng trên chỉ đọc trạng thái job, '
               '**không thể phân biệt** CHƯA ĐỒNG BỘ / LỆCH REFS / THIẾU LFS / CORRUPT.',
               '> Không upload/download GitHub Actions Artifact. Kết quả JSON tạm bị xóa cùng runner.', '']
     complete = (bool(selected) and n_pass == len(selected) and not api_error
