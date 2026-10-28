@@ -14,7 +14,7 @@ GITLAB_HOST="${GITLAB_HOST:-gitlab.com}"
 WITH_LFS="${WITH_LFS:-false}"
 WITH_WIKI="${WITH_WIKI:-false}"
 WITH_WIKI_LFS="${WITH_WIKI_LFS:-false}"
-CREATE_PRIVATE="${CREATE_PRIVATE:-false}"
+CREATE_PRIVATE="${CREATE_PRIVATE:-true}"
 BACKUP_PREFIX='__mirror_backup__'
 API_URL="https://${GITLAB_HOST}/api/v4"
 
