@@ -60,6 +60,94 @@ class MirrorLocalTests(unittest.TestCase):
         return subprocess.run(["bash", str(SCRIPT)], env=self.env, cwd=ROOT,
                               capture_output=True, text=True, check=True)
 
+    def test_lfs_flag_skips_network_when_source_history_has_no_pointers(self):
+        """All-true flags should not trigger LFS HTTP calls on non-LFS repos."""
+        bin_dir = self.base / "bin"
+        bin_dir.mkdir()
+        calls = self.base / "lfs-calls"
+        script = bin_dir / "git-lfs"
+        script.write_text(
+            '#!/usr/bin/env bash\n'
+            'echo "$*" >> "$MOCK_LFS_CALLS"\n'
+            'case "${1:-}" in\n'
+            '  version) echo "git-lfs/3.8.1 (mock)" ;;\n'
+            '  ls-files) ;;\n'
+            '  *) echo "Unexpected network LFS command: $*" >&2; exit 88 ;;\n'
+            'esac\n',
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        env = dict(self.env, WITH_LFS="true", WITH_WIKI_LFS="true",
+                   MOCK_LFS_CALLS=str(calls),
+                   PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+        result = subprocess.run(["bash", str(SCRIPT)], env=env, cwd=ROOT,
+                                capture_output=True, text=True, check=True)
+        self.assertIn("No source LFS pointers found", result.stderr)
+        lines = calls.read_text().splitlines()
+        self.assertTrue(any(line.startswith("ls-files --all") for line in lines))
+        self.assertFalse(any(line.startswith("fetch ") or line.startswith("push ") for line in lines))
+
+    def test_lfs_push_only_source_refs_and_no_destination_redownload(self):
+        """With LFS source pointers, push should not re-download archived LFS."""
+        bin_dir = self.base / "bin"
+        bin_dir.mkdir()
+        calls = self.base / "lfs-calls"
+        script = bin_dir / "git-lfs"
+        script.write_text(
+            '#!/usr/bin/env bash\n'
+            'echo "$*" >> "$MOCK_LFS_CALLS"\n'
+            'case "${1:-}" in\n'
+            '  version) echo "git-lfs/3.8.1 (mock)" ;;\n'
+            '  ls-files) echo "fake-lfs.bin" ;;\n'
+            '  fetch) [[ "$*" == "fetch --all origin" ]] ;;\n'
+            '  push) [[ "$*" == "push --all destination --stdin" ]] && cat >/dev/null ;;\n'
+            '  *) echo "Unexpected LFS command: $*" >&2; exit 88 ;;\n'
+            'esac\n',
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        env = dict(self.env, WITH_LFS="true", WITH_WIKI_LFS="true",
+                   MOCK_LFS_CALLS=str(calls),
+                   PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+        subprocess.run(["bash", str(SCRIPT)], env=env, cwd=ROOT,
+                       capture_output=True, text=True, check=True)
+        lines = calls.read_text().splitlines()
+        self.assertTrue(any(line == "push --all destination --stdin" for line in lines))
+        self.assertFalse(any(line.startswith("fetch --all destination") for line in lines))
+
+    def test_validation_detects_remote_missing_ref_even_if_push_exited_zero(self):
+        """Post-push verify must reject a misleading remote ref advertisement."""
+        import shutil
+        real_git = shutil.which("git")
+        bin_dir = self.base / "bin"
+        bin_dir.mkdir()
+        wrapper = bin_dir / "git"
+        wrapper.write_text(
+            '#!/usr/bin/env bash\n'
+            'if [[ "$*" == "ls-remote --refs --heads --tags destination" ]]; then\n'
+            f'  "{real_git}" "$@" | grep -v $\'\trefs/tags/v1$\'\n'
+            'else\n'
+            f'  exec "{real_git}" "$@"\n'
+            'fi\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        env = dict(self.env, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+        outcome = subprocess.run(["bash", str(SCRIPT)], env=env, cwd=ROOT,
+                                 capture_output=True, text=True)
+        self.assertNotEqual(outcome.returncode, 0)
+        self.assertIn("VERIFY FAILED (repository)", outcome.stderr)
+        self.assertIn("refs/tags/v1", outcome.stderr)
+
+    def test_verifies_annotated_tag_object_id(self):
+        git("tag", "-a", "annotated", "-m", "annotated tag", cwd=self.source_work)
+        git("push", "origin", "annotated", cwd=self.source_work)
+        result = self.sync()
+        self.assertIn("VERIFY OK (repository)", result.stderr)
+        self.assertIn("VERIFY OK (wiki)", result.stderr)
+        self.assertEqual(self.ref("source.git", "refs/tags/annotated"),
+                         self.ref("backup.git", "refs/tags/annotated"))
+
     def ref(self, repo, name):
         return git("--git-dir", self.base / repo, "rev-parse", name)
 

@@ -1,0 +1,250 @@
+name: GitLab Backup Restore Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'weekly = ~1/8 repos; all = every repo; single = one repo'
+        type: choice
+        options:
+          - weekly
+          - all
+          - single
+        default: weekly
+      target:
+        description: 'Destination repo name for scope=single (e.g. KernelSU_5ec1cff)'
+        type: string
+        required: false
+  schedule:
+    - cron: '17 3 * * 0' # Sunday 03:17 UTC (10:17 Vietnam time)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitlab-restore-test
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Checkout repository configuration
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Select repositories for this restore test
+        id: select
+        shell: bash
+        env:
+          TEST_SCOPE: ${{ inputs.scope || 'weekly' }}
+          TEST_TARGET: ${{ inputs.target || '' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from datetime import date, datetime, timezone
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path('scripts').resolve()))
+          from parse_repos import parse_file
+
+          entries = parse_file(Path('repos'))
+          scope = os.environ['TEST_SCOPE']
+          target = os.environ['TEST_TARGET'].strip()
+          # 8 weekly groups; with 64 repos, 8 tested each Sunday.
+          week = (datetime.now(timezone.utc).date() - date(2024, 1, 1)).days // 7
+          shard = week % 8
+          if scope == 'weekly':
+              selected = entries[shard::8]
+          elif scope == 'all':
+              selected = entries
+          elif scope == 'single':
+              if not target:
+                  sys.exit('ERROR: target is required when scope=single')
+              selected = [e for e in entries if e['target'].lower() == target.lower()]
+              if not selected:
+                  sys.exit(f'ERROR: target {target!r} was not found in repos')
+          else:
+              sys.exit(f'ERROR: invalid scope {scope!r}')
+          if not selected:
+              sys.exit('ERROR: no repositories selected')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write('matrix=' + json.dumps({'include': selected}, separators=(',', ':')) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as out:
+              out.write(f'## Restore test selection\n\nScope: **{scope}**; selected: **{len(selected)}/{len(entries)}** repositories.\n')
+              if scope == 'weekly':
+                  out.write(f'\nWeekly group: **{shard + 1}/8**. All groups complete in 8 weeks if the repo list stays unchanged.\n')
+          print(f'Selected {len(selected)} of {len(entries)} repositories (scope={scope}, group={shard + 1}/8).')
+          PY
+
+  restore:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # Avoid saturating GitLab / triggering rate limits.
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    name: Restore ${{ matrix.target }}
+    env:
+      GITLAB_NAMESPACE: ${{ vars.GITLAB_NAMESPACE }}
+      GITLAB_HOST: ${{ vars.GITLAB_HOST || 'gitlab.com' }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      TARGET: ${{ matrix.target }}
+      WITH_LFS: ${{ matrix.lfs }}
+      WITH_WIKI: ${{ matrix.wiki }}
+      WITH_WIKI_LFS: ${{ matrix.wiki_lfs }}
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_LFS_SKIP_SMUDGE: '1'
+      GIT_HTTP_MAX_REQUESTS: '2'
+
+    steps:
+      - name: Ensure Git LFS is installed
+        if: ${{ matrix.lfs || (matrix.wiki && matrix.wiki_lfs) }}
+        shell: bash
+        run: |
+          if ! git lfs version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git-lfs
+          fi
+
+      - name: Restore and verify GitLab backup (read-only)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${GITLAB_TOKEN:?Missing GitHub Actions secret GITLAB_TOKEN}"
+          : "${GITLAB_NAMESPACE:?Missing GitHub Actions variable GITLAB_NAMESPACE}"
+          [[ "$GITLAB_HOST" =~ ^[a-zA-Z0-9.-]+(:[0-9]{1,5})?$ ]] || { echo 'Invalid GITLAB_HOST'; exit 1; }
+          [[ "$GITLAB_NAMESPACE" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || { echo 'Invalid GITLAB_NAMESPACE'; exit 1; }
+
+          WORK="$RUNNER_TEMP/gitlab-restore"
+          mkdir -p "$WORK"
+          trap 'rm -rf "$WORK"' EXIT
+
+          # Git + Git LFS authenticate without writing the token to git config,
+          # remote URLs, or the repository's command-line arguments.
+          cat > "$WORK/askpass" <<'ASKPASS'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' 'oauth2' ;;
+            *Password*) printf '%s\n' "$GITLAB_TOKEN" ;;
+            *) printf '\n' ;;
+          esac
+          ASKPASS
+          chmod 700 "$WORK/askpass"
+          export GIT_ASKPASS="$WORK/askpass"
+
+          retry_clone() {
+            local url="$1" dir="$2" attempt
+            for attempt in 1 2 3; do
+              rm -rf -- "$dir"
+              if git clone --mirror "$url" "$dir"; then
+                return 0
+              fi
+              if (( attempt == 3 )); then return 1; fi
+              echo "Clone failed; attempt $attempt/3, retrying after $((attempt * 30))s..."
+              sleep "$((attempt * 30))"
+            done
+          }
+
+          retry_lfs_fetch() {
+            local dir="$1" attempt
+            for attempt in 1 2 3; do
+              if git -C "$dir" lfs fetch --all origin; then
+                return 0
+              fi
+              if (( attempt == 3 )); then return 1; fi
+              echo "LFS fetch failed; attempt $attempt/3, retrying after $((attempt * 30))s..."
+              sleep "$((attempt * 30))"
+            done
+          }
+
+          verify_repo() {
+            local label="$1" url="$2" dir="$3" check_lfs="$4"
+            local manifest="$WORK/${label}-lfs-manifest"
+            echo "::group::Restore $label from $url"
+            retry_clone "$url" "$dir"
+
+            # Detect a backup that exists but has no branches/tags at all.
+            local refcount
+            refcount="$(git -C "$dir" for-each-ref --format='%(refname)' refs/heads refs/tags | wc -l)"
+            (( refcount > 0 )) || { echo "FAIL: $label has no branches or tags"; return 1; }
+
+            # Verify all reachable Git objects, including archived backup tags.
+            git -C "$dir" fsck --full --strict --no-reflogs --no-dangling
+            echo "PASS: $label Git integrity ($refcount branches/tags)"
+
+            if [[ "$check_lfs" == true ]]; then
+              git -C "$dir" lfs ls-files --all --long > "$manifest"
+              if [[ -s "$manifest" ]]; then
+                git -C "$dir" config lfs.concurrenttransfers 2
+                git -C "$dir" config "lfs.${url}/info/lfs.locksverify" false
+                retry_lfs_fetch "$dir"
+
+                # Hash the actual DOWNLOADED bytes from GitLab for every LFS
+                # OID reachable in the mirror, not just LFS metadata or HEAD.
+                python3 - "$dir" "$manifest" "$label" <<'PY'
+          import hashlib
+          import re
+          import sys
+          from pathlib import Path
+
+          repo, manifest, label = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+          oids = set()
+          line_re = re.compile(r'^([0-9a-f]{64})\s+[\*-]\s')
+          for line in manifest.read_text(encoding='utf-8').splitlines():
+              match = line_re.match(line)
+              if not match:
+                  sys.exit(f'FAIL: unexpected LFS manifest line in {label}: {line[:100]!r}')
+              oids.add(match.group(1))
+          size_total = 0
+          for oid in sorted(oids):
+              path = repo / 'lfs' / 'objects' / oid[:2] / oid[2:4] / oid
+              if not path.is_file():
+                  sys.exit(f'FAIL: missing LFS object {oid} in {label}')
+              digest = hashlib.sha256()
+              with path.open('rb') as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                      digest.update(chunk)
+              if digest.hexdigest() != oid:
+                  sys.exit(f'FAIL: CORRUPT LFS object {oid} in {label}')
+              size_total += path.stat().st_size
+          print(f'PASS: {label} LFS: verified {len(oids)} objects, {size_total:,} bytes (SHA-256)')
+          PY
+              else
+                echo "SKIP: $label has no reachable Git LFS pointers"
+              fi
+            fi
+            echo "::endgroup::"
+            printf -- '- **%s:** Git fsck PASS, LFS=%s\n' "$label" "$check_lfs" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          REPO_URL="https://${GITLAB_HOST}/${GITLAB_NAMESPACE}/${TARGET}.git"
+          verify_repo repository "$REPO_URL" "$WORK/repository.git" "$WITH_LFS"
+
+          if [[ "$WITH_WIKI" == true ]]; then
+            # Determine whether the GitLab Wiki actually has any pages.
+            # An upstream without a Wiki is allowed to have no GitLab Wiki.
+            encoded_path="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${GITLAB_NAMESPACE}/${TARGET}")"
+            wiki_api="https://${GITLAB_HOST}/api/v4/projects/${encoded_path}/wikis?per_page=1"
+            curl --fail --silent --show-error --retry 3 --retry-delay 10 \
+              --retry-all-errors --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+              "$wiki_api" -o "$WORK/wiki-pages.json"
+            jq -e 'type == "array"' "$WORK/wiki-pages.json" > /dev/null
+            if jq -e 'length > 0' "$WORK/wiki-pages.json" > /dev/null; then
+              WIKI_URL="https://${GITLAB_HOST}/${GITLAB_NAMESPACE}/${TARGET}.wiki.git"
+              verify_repo wiki "$WIKI_URL" "$WORK/wiki.git" "$WITH_WIKI_LFS"
+            else
+              echo 'SKIP: GitLab Wiki has no current pages; no Wiki history was tested.'
+              echo '- **Wiki:** SKIPPED (no current pages on GitLab)' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          echo "PASS: restored GitLab backup ${TARGET} and verified stored objects."

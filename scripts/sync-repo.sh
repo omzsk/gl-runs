@@ -17,6 +17,7 @@ WITH_WIKI_LFS="${WITH_WIKI_LFS:-false}"
 CREATE_PRIVATE="${CREATE_PRIVATE:-true}"
 BACKUP_PREFIX='__mirror_backup__'
 API_URL="https://${GITLAB_HOST}/api/v4"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 notice() { printf '%s\n' "$*" >&2; }
@@ -36,7 +37,7 @@ for option in WITH_LFS WITH_WIKI WITH_WIKI_LFS CREATE_PRIVATE; do
   [[ "$value" == true || "$value" == false ]] || fail "$option must be true or false"
 done
 check_https_url "$SOURCE_URL"
-for bin in git curl jq; do command -v "$bin" >/dev/null 2>&1 || fail "Missing command: $bin"; done
+for bin in git curl jq python3; do command -v "$bin" >/dev/null 2>&1 || fail "Missing command: $bin"; done
 if [[ "$WITH_LFS" == true || ( "$WITH_WIKI" == true && "$WITH_WIKI_LFS" == true ) ]]; then
   git lfs version >/dev/null 2>&1 || fail 'Git LFS is required but not installed.'
 fi
@@ -228,6 +229,69 @@ set_destination_default() {
   configure_new_project_force_push "$wanted"
 }
 
+# Verify the GitLab-advertised Git references after every sync. This reads
+# ref metadata (not a second clone), so it works even for very large histories.
+# Compare the exact tag object ID, not the peeled commit of annotated tags.
+verify_remote_git_refs() {
+  local kind="$1" wiki_alias="$2" default="$3" advertised_head="$4"
+  local ref oid name expected checked=0 kept=0
+  local -A actual=() expected_refs=()
+  local -a published_heads=() published_tags=()
+
+  notice "Validating $kind branches, tags, and immutable backup refs against destination..."
+  dest_git ls-remote --refs --heads --tags destination > "$WORK/$kind-remote-refs"
+  while read -r oid ref; do
+    [[ -n "${ref:-}" ]] || continue
+    actual["$ref"]="$oid"
+  done < "$WORK/$kind-remote-refs"
+
+  mapfile -t published_heads < <(git for-each-ref --format='%(refname)' refs/heads)
+  mapfile -t published_tags < <(git for-each-ref --format='%(refname)' refs/tags)
+  for ref in "${published_heads[@]}" "${published_tags[@]}"; do
+    # refs/tags/__mirror_backup__/ is local only for NEW backup tags;
+    # other existing backup refs are retained at the destination untouched.
+    expected="$(git rev-parse "$ref")"
+    if [[ "${actual[$ref]:-}" != "$expected" ]]; then
+      fail "VERIFY FAILED ($kind): $ref: expected $expected, GitLab has ${actual[$ref]:-<missing>}"
+    fi
+    expected_refs["$ref"]=1
+    ((checked+=1))
+  done
+  if [[ -n "$wiki_alias" ]]; then
+    ref="refs/heads/$wiki_alias"
+    expected="$(git rev-parse "refs/heads/$default")"
+    if [[ "${actual[$ref]:-}" != "$expected" ]]; then
+      fail "VERIFY FAILED ($kind): Wiki alias $ref mismatch (expected $expected, got ${actual[$ref]:-<missing>})"
+    fi
+    expected_refs["$ref"]=1
+    ((checked+=1))
+  fi
+  for ref in "${!actual[@]}"; do
+    case "$ref" in
+      refs/heads/*)
+        if [[ -z "${expected_refs[$ref]:-}" ]]; then
+          # GitLab may reject deleting its still-advertised default HEAD.
+          if [[ "$ref" == "refs/heads/$advertised_head" ]]; then
+            notice "::warning::Validation: retained destination default HEAD branch $ref (not present at source)."
+            ((kept+=1))
+          else
+            fail "VERIFY FAILED ($kind): unexpected extra destination branch $ref"
+          fi
+        fi
+        ;;
+      refs/tags/*)
+        [[ "$ref" == "refs/tags/$BACKUP_PREFIX/"* ]] && continue
+        [[ -n "${expected_refs[$ref]:-}" ]] || fail "VERIFY FAILED ($kind): unexpected extra destination tag $ref"
+        ;;
+    esac
+  done
+  notice "VERIFY OK ($kind): $checked source/backup refs match GitLab (extra retained HEADs: $kept)."
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    printf -- '- **Verify %s Git refs: PASS** (%s refs matched; %s retained default HEAD)\n' \
+      "$kind" "$checked" "$kept" >> "$GITHUB_STEP_SUMMARY"
+  fi
+}
+
 # Push with an exact object-ID lease for EVERY destination ref, including new
 # refs (empty lease). This rejects concurrent writes without silently erasing
 # commits or tags which were not included in our backup snapshot.
@@ -246,6 +310,11 @@ mirror_git() (
   git clone --bare -- "$src" "$repo_dir"
   cd "$repo_dir"
   git remote add destination "$dest"
+  # GitLab supports LFS locking, but this is a one-way backup with no lock
+  # management. Avoid a locking API check before every Git push.
+  git config --local "lfs.${dest%/}/info/lfs.locksverify" false
+  # Git LFS defaults to more concurrent transfers; keep within GitLab limits.
+  git config --local lfs.concurrenttransfers 2
   mapfile -t src_heads < <(git for-each-ref --format='%(refname)' refs/heads)
   (( ${#src_heads[@]} > 0 )) || fail "Upstream $kind has no branches. No destination refs changed."
   mapfile -t src_tags < <(git for-each-ref --format='%(refname)' refs/tags)
@@ -255,10 +324,21 @@ mirror_git() (
   default="$(source_default_branch)"
   notice "Upstream $kind default branch: $default"
 
-  # Download source LFS FIRST, before adding any GitLab-only refs locally.
+  # Only fetch LFS objects when actual LFS pointers exist anywhere in the
+  # source's history. All repos may opt in, but most do not use Git LFS.
+  # --all includes pointer versions deleted from newer commits.
   if [[ "$lfs" == true ]]; then
-    notice 'Fetching source LFS history...'
-    git lfs fetch --all origin
+    local lfs_files="$WORK/${kind}-lfs-files"
+    # Capture source-only OIDs BEFORE destination refs are fetched: older
+    # archived LFS pointers may exist on GitLab but not in the source cache.
+    git lfs ls-files --all --long > "$lfs_files" || fail "Cannot inspect $kind LFS history"
+    if [[ ! -s "$lfs_files" ]]; then
+      notice 'No source LFS pointers found; skipping LFS network requests.'
+      lfs=false
+    else
+      notice 'Fetching source LFS history...'
+      git lfs fetch --all origin
+    fi
   fi
 
   if [[ "$kind" == repository ]]; then
@@ -302,14 +382,10 @@ mirror_git() (
     old_tags["$name"]="$old"
   done < <(git for-each-ref --format='%(refname) %(objectname)' refs/destination/tags)
 
-  # Previous backups can refer to LFS objects unavailable at the source.
-  if [[ "$lfs" == true && $(( ${#dst_heads[@]} + ${#dst_tags[@]} )) -gt 0 ]]; then
-    notice 'Fetching destination LFS history, including previous backups...'
-    {
-      for name in "${dst_heads[@]}"; do printf 'refs/destination/heads/%s\n' "$name"; done
-      for name in "${dst_tags[@]}"; do printf 'refs/destination/tags/%s\n' "$name"; done
-    } | dest_git -c "lfs.url=${dest%/}/info/lfs" lfs fetch --all destination --stdin
-  fi
+  # Old destination LFS objects already live in THIS SAME GitLab project.
+  # Backup refs only preserve those existing objects; re-downloading all old
+  # LFS history on every backup would generate avoidable rate-limited traffic.
+  # Upload only objects reachable from source heads/tags in the next step.
 
   # Archive changed/deleted destination branches, except fast-forwards.
   for name in "${dst_heads[@]}"; do
@@ -345,11 +421,15 @@ mirror_git() (
     notice "Archived previous tag: $name ($old)"
   done
 
-  # Upload LFS while live Git refs are still intact. With --all, active source
-  # refs and newly created backup tags are included.
+  # Upload LFS for ALL source history, before publishing Git refs.
+  # Do not re-upload old archived destination data: it already belongs to the
+  # same GitLab project, and can be retained by the backup Git tags below.
   if [[ "$lfs" == true ]]; then
-    notice 'Uploading source and archived LFS to GitLab...'
-    dest_git -c "lfs.url=${dest%/}/info/lfs" lfs push --all destination
+    notice 'Uploading LFS from source heads/tags to GitLab (limited concurrency)...'
+    {
+      printf '%s\n' "${src_heads[@]}"
+      if (( ${#src_tags[@]} > 0 )); then printf '%s\n' "${src_tags[@]}"; fi
+    } | dest_git -c "lfs.url=${dest%/}/info/lfs" lfs push --all destination --stdin
   fi
 
   # First publish immutable backup refs; never force-replace a prior backup.
@@ -408,6 +488,22 @@ mirror_git() (
   done
   if (( ${#delete_specs[@]} > 0 )); then
     dest_git push --atomic "${delete_leases[@]}" destination "${delete_specs[@]}"
+  fi
+
+  # A successful git push alone does not prove that every expected ref is
+  # advertised by GitLab. Fail this job on any mismatch.
+  verify_remote_git_refs "$kind" "$wiki_alias" "$default" "$advertised_head"
+
+  # LFS uses a separate object store. Query GitLab's download-capability API
+  # for every source-history LFS object without re-downloading large files.
+  if [[ "$lfs" == true ]]; then
+    if [[ "$API_ENABLED" == true ]]; then
+      notice "Validating $kind LFS objects at GitLab (metadata only)..."
+      python3 "$SCRIPT_DIR/verify_lfs_remote.py" \
+        --repo "$repo_dir" --manifest "$WORK/${kind}-lfs-files" --destination "$dest"
+    else
+      notice "Local test mode: skipping live GitLab LFS API verification."
+    fi
   fi
 
   notice "DONE: $kind, created $backups new immutable backup tag(s)."

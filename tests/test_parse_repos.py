@@ -24,13 +24,13 @@ class ParseRepoTests(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
             return mod.parse_file(path)
 
-    def test_bundled_48_repos(self):
+    def test_bundled_64_repos(self):
         entries = mod.parse_file(ROOT / "repos")
-        self.assertEqual(len(entries), 48)
+        self.assertEqual(len(entries), 64)
         self.assertEqual(entries[0]["source"], "https://github.com/tiann/KernelSU.git")
         self.assertEqual(entries[0]["target"], "KernelSU_tiann")
         self.assertEqual(entries[4]["target"], "KernelSU_JingMatrix")
-        self.assertEqual(entries[-1]["target"], "LSPromise_LSPosed")
+        self.assertEqual(entries[-1]["target"], "Microsoft-Activation-Scripts_massgravel")
         self.assertTrue(all(all(flag in e for flag in mod.FLAGS) for e in entries))
 
     def test_comments_blanks_crlf_and_flags(self):
@@ -85,9 +85,9 @@ class ParseRepoTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(PARSER), str(ROOT / "repos")],
                                     capture_output=True, text=True, env=env, check=True)
             self.assertEqual(result.stdout, "")
-            self.assertIn("Validated 48", result.stderr)
+            self.assertIn("Validated 64", result.stderr)
             matrix = json.loads(output.read_text().strip().removeprefix("matrix="))
-            self.assertEqual(len(matrix["include"]), 48)
+            self.assertEqual(len(matrix["include"]), 64)
 
 
 if __name__ == "__main__":
