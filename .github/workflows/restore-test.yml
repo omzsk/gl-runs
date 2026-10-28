@@ -98,7 +98,6 @@ jobs:
       WITH_WIKI_LFS: ${{ matrix.wiki_lfs }}
       GITLAB_NAMESPACE: ${{ vars.GITLAB_NAMESPACE }}
       GITLAB_HOST: ${{ vars.GITLAB_HOST || 'gitlab.com' }}
-      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GIT_TERMINAL_PROMPT: '0'
       GIT_LFS_SKIP_SMUDGE: '1'
       GIT_HTTP_MAX_REQUESTS: '2'
@@ -117,8 +116,10 @@ jobs:
             sudo apt-get install -y git-lfs
           fi
 
-      - name: Thiết lập xác thực GitLab (token không nằm trong URL)
+      - name: So sánh GitHub và kiểm tra khôi phục từ GitLab
         shell: bash
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
           set -euo pipefail
           : "${GITLAB_TOKEN:?Thiếu secret GITLAB_TOKEN}"
@@ -127,24 +128,23 @@ jobs:
           [[ "$GITLAB_NAMESPACE" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || exit 1
           cat > "$RUNNER_TEMP/gitlab-askpass" <<'SH'
           #!/usr/bin/env bash
-          # Chỉ trả secret cho URL có hostname GitLab đã cấu hình.
-          case "$1" in
-            *"$GITLAB_HOST"*)
-              case "$1" in
-                *Username*) printf '%s\n' 'oauth2' ;;
-                *Password*) printf '%s\n' "$GITLAB_TOKEN" ;;
-                *) printf '\n' ;;
-              esac ;;
-            *) printf '\n' ;;
+          set -euo pipefail
+          prompt="${1:-}"
+          [[ "$prompt" =~ ^(Username|Password)\ for\ \'(https://[^\'[:space:]]+)\':\ *$ ]] || exit 1
+          kind="${BASH_REMATCH[1]}"
+          url="${BASH_REMATCH[2]}"
+          authority="${url#https://}"
+          authority="${authority%%/*}"
+          authority="${authority##*@}"
+          [[ "$authority" == "$GITLAB_HOST" ]] || exit 1
+          case "$kind" in
+            Username) printf '%s\n' 'oauth2' ;;
+            Password) printf '%s\n' "$GITLAB_TOKEN" ;;
           esac
           SH
           chmod 700 "$RUNNER_TEMP/gitlab-askpass"
-          echo "GIT_ASKPASS=$RUNNER_TEMP/gitlab-askpass" >> "$GITHUB_ENV"
-
-      - name: So sánh GitHub và kiểm tra khôi phục từ GitLab
-        shell: bash
-        run: |
-          set -euo pipefail
+          export GIT_ASKPASS="$RUNNER_TEMP/gitlab-askpass"
+          trap 'rm -f -- "$RUNNER_TEMP/gitlab-askpass"' EXIT
           python3 scripts/verify_restore_full.py \
             --source "$SOURCE_URL" \
             --destination "https://${GITLAB_HOST}/${GITLAB_NAMESPACE}/${TARGET}.git" \

@@ -47,10 +47,18 @@ trap 'rm -rf -- "$WORK"' EXIT
 umask 077
 cat > "$WORK/askpass" <<'ASKPASS'
 #!/usr/bin/env bash
-case "${1:-}" in
-  *Username*) printf '%s\n' "oauth2" ;;
-  *Password*) printf '%s\n' "$GITLAB_TOKEN" ;;
-  *) exit 1 ;;
+set -euo pipefail
+prompt="${1:-}"
+[[ "$prompt" =~ ^(Username|Password)\ for\ \'(https://[^\'[:space:]]+)\':\ *$ ]] || exit 1
+kind="${BASH_REMATCH[1]}"
+url="${BASH_REMATCH[2]}"
+authority="${url#https://}"
+authority="${authority%%/*}"
+authority="${authority##*@}"
+[[ "$authority" == "$GITLAB_HOST" ]] || exit 1
+case "$kind" in
+  Username) printf '%s\n' 'oauth2' ;;
+  Password) printf '%s\n' "$GITLAB_TOKEN" ;;
 esac
 ASKPASS
 chmod 700 "$WORK/askpass"
@@ -80,8 +88,8 @@ api_request() {
 api_expect() {
   local expected="$1" action="$2"
   if [[ "$API_STATUS" != "$expected" ]]; then
-    notice "API $action failed (HTTP $API_STATUS):"
-    cat "$WORK/api-response.json" >&2 || true
+    # Never print raw third-party API error bodies: they may reflect sensitive inputs.
+    notice "API $action failed (HTTP $API_STATUS). Response body retained only in temporary runner directory."
     fail "$action"
   fi
 }

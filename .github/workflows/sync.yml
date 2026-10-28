@@ -42,7 +42,6 @@ jobs:
       SOURCE_URL: ${{ matrix.source }}
       DEST_PATH: ${{ vars.GITLAB_NAMESPACE }}/${{ matrix.target }}
       GITLAB_HOST: ${{ vars.GITLAB_HOST || 'gitlab.com' }}
-      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       WITH_LFS: ${{ matrix.lfs }}
       WITH_WIKI: ${{ matrix.wiki }}
       WITH_WIKI_LFS: ${{ matrix.wiki_lfs }}
@@ -67,4 +66,6 @@ jobs:
 
       - name: Sync and verify repository, Wiki, and LFS
         shell: bash
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: bash scripts/sync-repo.sh
