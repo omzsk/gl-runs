@@ -9,6 +9,7 @@ is NOT within the scope of a Git repository backup.
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -44,6 +45,9 @@ class DataCorruption(VerificationError):
 
 class MissingLfs(VerificationError):
     """An LFS pointer is not backed by an object at the destination."""
+    def __init__(self, message, oids=None):
+        self.oids = list(oids or [])
+        super().__init__(message)
 
 
 class SnapshotChanged(VerificationError):
@@ -112,7 +116,7 @@ def list_lfs(repo):
 def verify_lfs(repo, expected, all_dest_oids, url):
     if not expected.issubset(all_dest_oids):
         missing = sorted(expected - all_dest_oids)
-        raise MissingLfs(f'GitLab thiếu {len(missing)} LFS OID so với GitHub, ví dụ {missing[:3]}')
+        raise MissingLfs(f'GitLab thiếu {len(missing)} LFS OID so với GitHub; xem danh sách OID trong báo cáo.', oids=missing)
     if not all_dest_oids:
         return {'count': 0, 'bytes': 0, 'archived': 0}
     git('-C', repo, 'config', 'lfs.concurrenttransfers', '2')
@@ -124,7 +128,7 @@ def verify_lfs(repo, expected, all_dest_oids, url):
     for index, oid in enumerate(sorted(all_dest_oids), 1):
         obj = Path(repo) / 'lfs' / 'objects' / oid[:2] / oid[2:4] / oid
         if not obj.is_file():
-            raise MissingLfs(f'LFS object tải từ GitLab không xuất hiện tại runner: {oid}')
+            raise MissingLfs(f'LFS object tải từ GitLab không xuất hiện tại runner: {oid}', oids=[oid])
         digest = hashlib.sha256()
         with obj.open('rb') as stream:
             for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b''):
@@ -310,67 +314,189 @@ def one_kind(source_url, dest_url, work, kind, with_lfs, is_wiki=False):
 
 
 def safe_md(s):
-    return str(s).replace('|', '\\|').replace('\n', ' ').replace('\r', ' ')[:600]
+    """Escape untrusted remote text in GitHub-flavored Markdown and HTML summary."""
+    value = html.escape(str(s), quote=True)
+    return value.replace('|', '\\|').replace('`', '\\`').replace('\n', ' ').replace('\r', ' ')[:600]
 
 
 def short_oid(oid):
-    return oid[:12] if oid else '— (không có)'
+    return oid[:12] if oid else '—'
+
+
+def glyph(status):
+    return {'ĐẠT': '✅', 'KHÔNG CÓ': '⏭️', 'BỎ QUA': '⏭️',
+            'CHƯA ĐỒNG BỘ': '⚠️', 'LỆCH REFS': '❌',
+            'THIẾU LFS': '❌', 'LỖI DỮ LIỆU': '🚨',
+            'CHƯA XÁC MINH': '❔'}.get(status, '❌')
+
+
+def guidance(status):
+    return {
+        'CHƯA ĐỒNG BỘ': 'GitLab đang ở commit cũ hơn. Kiểm tra lần backup gần nhất, chạy sync rồi kiểm tra lại; đây không phải bằng chứng corrupt.',
+        'LỆCH REFS': 'Kiểm tra branch/tag được chỉ rõ phía dưới. Xem workflow sync để xác định force-push, tag đổi hoặc branch bị xoá.',
+        'THIẾU LFS': 'Kiểm tra OID LFS bị thiếu, log bước upload LFS trên workflow backup và quyền truy cập GitLab.',
+        'LỖI DỮ LIỆU': 'Ưu tiên điều tra Git object/LFS nêu trong lỗi. Chạy xác minh lại để loại trừ lỗi runner/mạng; chưa nên dùng bản này để restore.',
+        'CHƯA XÁC MINH': 'Dữ liệu chưa được xác minh đầy đủ. Kiểm tra rate limit, token, nguồn thay đổi khi test và chạy lại.',
+    }.get(status, 'Xem log của repository và tải JSON artifact để điều tra.')
+
+
+def issue_line(problem):
+    kind = safe_md(problem.get('kind', 'KHÁC'))
+    name = safe_md(problem.get('ref', 'không rõ ref'))
+    behind = problem.get('commits_behind')
+    intro = f' — chậm **{behind} commit**' if behind is not None else ''
+    return f'**`{name}`** (`{kind}`){intro}: GitHub `{short_oid(problem.get("github_sha"))}` → GitLab `{short_oid(problem.get("gitlab_sha"))}`.'
+
+
+def section_brief(section, label):
+    status = section.get('status', 'CHƯA XÁC MINH')
+    if status == 'ĐẠT':
+        return (f'- **{label}:** ✅ **PASS** — Git fsck PASS; '
+                f'{section["branches"]} branch, {section["tags"]} tag khớp SHA; '
+                f'{section["backup_tags"]} tag lưu lịch sử được giữ.')
+    if status in ('KHÔNG CÓ', 'BỎ QUA'):
+        return f'- **{label}:** ⏭️ **{status}** — {safe_md(section.get("note", "Không có dữ liệu để kiểm tra."))}'
+    count = len(section.get('issues') or [])
+    more = f' — {count} ref khác nhau' if count else ''
+    where = f' (bước: {safe_md(section["stage"])})' if section.get('stage') else ''
+    return f'- **{label}:** {glyph(status)} **{status}**{more}{where}.'
+
+
+def lfs_brief(section, label='LFS'):
+    if section.get('status') == 'ĐẠT':
+        lfs = section['lfs']
+        return (f'- **{label}:** ✅ **PASS** — tải và xác minh SHA-256 của '
+                f'{lfs["count"]} object ({lfs["bytes"]:,} byte); '
+                f'{lfs["archived"]} object chỉ thuộc lịch sử backup cũ.')
+    return f'- **{label}:** ⏸️ **CHƯA XÁC NHẬN** — không có kết quả kiểm tra SHA-256 đầy đủ cho hạng mục này.'
+
+
+def render_diagnostics(section, title, limit=20):
+    if section.get('status') in ('ĐẠT', 'KHÔNG CÓ', 'BỎ QUA'):
+        return []
+    lines = [f'### Chi tiết lỗi — {title}', '']
+    if section.get('stage'):
+        lines.append(f'- **Bước gặp vấn đề:** {safe_md(section["stage"])}.')
+    if section.get('error'):
+        lines.append(f'- **Thông báo:** {safe_md(section["error"])}')
+    for problem in (section.get('issues') or [])[:3]:
+        lines.append('- **Ref lệch:** ' + issue_line(problem))
+        if problem.get('reason'):
+            lines.append('  - **Nguyên nhân:** ' + safe_md(problem['reason']))
+    oids = section.get('missing_oids') or []
+    if oids:
+        lines.append(f'- **LFS thiếu:** {len(oids)} object, ví dụ: ' + ', '.join(f'`{safe_md(o)}`' for o in oids[:3]))
+    for item in (section.get('snapshot_changes') or [])[:3]:
+        lines.append(f'- **Ref đổi trong khi test:** `{safe_md(item.get("ref", "?"))}`: '
+                     f'`{short_oid(item.get("old"))}` → `{short_oid(item.get("new"))}`.')
+    lines.append('- **Khuyến nghị:** ' + guidance(section.get('status')))
+    issues = section.get('issues') or []
+    changes = section.get('snapshot_changes') or []
+    if issues or changes or len(oids) > 3:
+        lines += ['', f'<details><summary>Xem bảng chi tiết {title} ({len(issues)} ref, {len(changes)} thay đổi lúc test, {len(oids)} LFS thiếu)</summary>', '']
+        if issues:
+            lines += ['| Ref | Loại và giải thích | GitHub SHA / commit UTC | GitLab SHA / commit UTC |',
+                      '|---|---|---|---|']
+            for item in issues[:limit]:
+                gh = item.get('github') or {}
+                gl = item.get('gitlab') or {}
+                reason = item.get('reason', '')
+                if item.get('commits_behind') is not None:
+                    reason += f' (chậm {item["commits_behind"]} commit)'
+                lines.append(f'| `{safe_md(item.get("ref", "?"))}` | `{safe_md(item.get("kind", ""))}` — {safe_md(reason)} '
+                             f'| `{short_oid(item.get("github_sha"))}` / `{safe_md(gh.get("commit_time") or "—")}` '
+                             f'| `{short_oid(item.get("gitlab_sha"))}` / `{safe_md(gl.get("commit_time") or "—")}` |')
+            if len(issues) > limit:
+                lines.append(f'\nCòn {len(issues)-limit} ref khác trong JSON artifact.')
+        if changes:
+            lines += ['', '| Ref thay đổi trong khi test | SHA ban đầu | SHA sau |', '|---|---|---|']
+            for item in changes[:limit]:
+                lines.append(f'| `{safe_md(item.get("ref", "?"))}` | `{short_oid(item.get("old"))}` | `{short_oid(item.get("new"))}` |')
+        if len(oids) > 3:
+            lines += ['', '**Danh sách LFS OID thiếu (tối đa 20):**', '']
+            lines.extend(f'- `{safe_md(oid)}`' for oid in oids[:limit])
+        lines += ['', '</details>']
+    return lines + ['']
 
 
 def render_summary(report):
-    output = [f'### {safe_md(report["target"])} — {report["status"]}', '',
-              f'**Thời điểm kiểm tra (UTC):** `{report["time_utc"]}`',
-              f'Nguồn: `{safe_md(report["source"])}`',
-              f'Đích: `{safe_md(report["destination"])}`', '',
-              '| Hạng mục | Trạng thái | Chi tiết |', '|---|---|---|']
-    for key, label in [('repository', 'Git, refs, LFS'), ('wiki', 'Wiki + LFS')]:
-        section = report.get(key, {})
-        details = section.get('error') or section.get('note') or ''
-        if section.get('status') == 'ĐẠT':
-            details = (f'{section["branches"]} nhánh, {section["tags"]} tag; '
-                       f'{section["backup_tags"]} tag lưu lịch sử; '
-                       f'{section["lfs"]["count"]} LFS object, '
-                       f'{section["lfs"]["bytes"]:,} bytes đã hash')
-        output.append(f'| {label} | **{section.get("status", "CHƯA XÁC MINH")}** | {safe_md(details)} |')
-    for key, label in [('repository', 'Repository'), ('wiki', 'Wiki')]:
-        section = report.get(key, {})
-        issues = section.get('issues', [])
-        if issues:
-            output += ['', f'#### Chi tiết khác biệt — {label} ({len(issues)} ref)', '',
-                       '| Ref / Loại | SHA GitHub | SHA GitLab | Lý do |', '|---|---|---|---|']
-            for entry in issues[:30]:
-                reason = entry['reason']
-                if entry.get('commits_behind') is not None:
-                    reason += f' Cần đồng bộ thêm {entry["commits_behind"]} commit.'
-                output.append(f'| `{safe_md(entry["ref"])}` ({entry["kind"]}) '
-                              f'| `{short_oid(entry.get("github_sha"))}` '
-                              f'| `{short_oid(entry.get("gitlab_sha"))}` '
-                              f'| {safe_md(reason)} |')
-            if len(issues) > 30:
-                output.append(f'\nCòn {len(issues) - 30} ref khác trong JSON artifact.')
-            output += ['', '**Mốc thời gian commit của các ref khác biệt (không phải giờ push/backup):**', '',
-                       '| Ref | GitHub (committer) | GitLab (committer) |', '|---|---|---|']
-            for entry in issues[:30]:
-                output.append(f'| `{safe_md(entry["ref"])}` | '
-                              f'`{entry["github"].get("commit_time") or "—"}` | '
-                              f'`{entry["gitlab"].get("commit_time") or "—"}` |')
-        if section.get('note') and issues:
-            output.append(f'\n*{safe_md(section["note"])}*')
-        if section.get('snapshot_changes'):
-            output += ['', f'#### Ref thay đổi trong lúc kiểm tra — {label}', '',
-                       '| Ref | Lúc đầu | Lúc sau |', '|---|---|---|']
-            for item in section['snapshot_changes'][:30]:
-                output.append(f'| `{safe_md(item["ref"])}` | `{short_oid(item.get("old"))}` | '
-                              f'`{short_oid(item.get("new"))}` |')
-    output += ['', '> **Phân loại:** CHƯA ĐỒNG BỘ = GitLab chậm theo lịch sử Git, '
-               'không tự động có nghĩa corrupt. LỆCH REFS = khác branch/tag chưa xác định đầy đủ nguyên nhân. '
-               'THIẾU LFS = thiếu object được tham chiếu hoặc không tải về được dù bước fetch đã kết thúc. '
-               'LỖI DỮ LIỆU = phát hiện lỗi thực sự ở fsck hoặc checksum LFS. '
-               'CHƯA XÁC MINH = snapshot thay đổi / lỗi truy cập / chưa kiểm tra xong.', '',
-               '**Phạm vi:** Git refs, Git objects, Git LFS và Git Wiki; không gồm Issues/PR/Releases, '
-               'metadata, quyền truy cập. Thời gian commit KHÔNG phải giờ GitHub nhận commit hay giờ backup chạy.']
-    return '\n'.join(output) + '\n'
+    repo = report.get('repository') or {}
+    wiki = report.get('wiki') or {}
+    status = report.get('status', 'CHƯA XÁC MINH')
+    lines = [f'## Restore {safe_md(report["target"])} — {glyph(status)} {status}', '',
+             section_brief(repo, 'Repository'),
+             lfs_brief(repo),
+             section_brief(wiki, 'Wiki'),
+             *([lfs_brief(wiki, 'Wiki LFS')] if wiki.get('status') == 'ĐẠT' else []),
+             f'- **Kết luận:** {glyph(status)} **{status}** — '
+             + ('Các hạng mục trong phạm vi đã kiểm tra đều đạt.' if status == 'ĐẠT' else 'Chưa thể kết luận backup đã khớp đầy đủ.'), '',
+             f'**Bắt đầu kiểm tra (UTC):** `{safe_md(report.get("time_utc", "—"))}`', '']
+    if status != 'ĐẠT':
+        for name, sect in [('Repository', repo), ('Wiki', wiki)]:
+            lines.extend(render_diagnostics(sect, name))
+    lines += ['> **Lưu ý:** `CHƯA ĐỒNG BỘ` không đồng nghĩa corrupt. '
+              'Wiki `BỎ QUA`/`KHÔNG CÓ` không phải bằng chứng đã khôi phục nội dung Wiki. '
+              'Thời gian commit trong bảng là committer date, không phải thời gian backup. '
+              'JSON artifact chứa SHA đầy đủ và mọi ref lệch.']
+    return '\n'.join(lines) + '\n'
 
+
+def render_aggregate_summary(selected, reports, prepare_status, verify_status):
+    counts = {}
+    ok = 0
+    for entry in selected:
+        status = reports.get(entry['target'], {}).get('status', 'CHƯA XÁC MINH')
+        counts[status] = counts.get(status, 0) + 1
+        if status == 'ĐẠT':
+            ok += 1
+    rows = [f'## Tổng hợp Restore Test — {ok}/{len(selected)} repository ĐẠT', '',
+            f'- **✅ ĐẠT:** {ok}',
+            f'- **⚠️ CHƯA ĐỒNG BỘ:** {counts.get("CHƯA ĐỒNG BỘ", 0)}',
+            f'- **❌ LỆCH REFS:** {counts.get("LỆCH REFS", 0)}',
+            f'- **❌ THIẾU LFS:** {counts.get("THIẾU LFS", 0)}',
+            f'- **🚨 LỖI DỮ LIỆU:** {counts.get("LỖI DỮ LIỆU", 0)}',
+            f'- **❔ CHƯA XÁC MINH/khác:** {len(selected) - sum(counts.get(s, 0) for s in ("ĐẠT", "CHƯA ĐỒNG BỘ", "LỆCH REFS", "THIẾU LFS", "LỖI DỮ LIỆU"))}', '',
+            f'**Trạng thái chạy:** chuẩn bị `{safe_md(prepare_status)}`, kiểm tra `{safe_md(verify_status)}`.', '']
+    for entry in selected:
+        name = entry['target']
+        rep = reports.get(name)
+        status = rep.get('status', 'CHƯA XÁC MINH') if rep else 'CHƯA XÁC MINH'
+        if status == 'ĐẠT':
+            continue
+        rows.append(f'### {glyph(status)} {safe_md(name)} — {status}')
+        if not rep:
+            rows += ['- **Không tìm thấy JSON report:** kiểm tra log job, lỗi runner hoặc bước upload artifact.', '']
+            continue
+        for key, label in (('repository', 'Repository'), ('wiki', 'Wiki')):
+            section = rep.get(key) or {}
+            if section.get('status') in ('ĐẠT', 'KHÔNG CÓ', 'BỎ QUA'):
+                continue
+            rows.append(section_brief(section, label))
+            issues = section.get('issues') or []
+            for issue in issues[:3]:
+                rows.append('  - **Sai khác:** ' + issue_line(issue))
+            if not issues and section.get('error'):
+                rows.append('  - **Lỗi:** ' + safe_md(section['error']))
+            missing = section.get('missing_oids') or []
+            if missing:
+                rows.append('  - **LFS OID thiếu:** ' + ', '.join(f'`{safe_md(oid)}`' for oid in missing[:3]))
+            for change in (section.get('snapshot_changes') or [])[:3]:
+                rows.append(f'  - **Ref đang thay đổi:** `{safe_md(change.get("ref", "?"))}` '
+                            f'`{short_oid(change.get("old"))}` → `{short_oid(change.get("new"))}`')
+        rows.append(f'- **Khuyến nghị:** {guidance(status)}')
+        rows.append('')
+    rows += ['<details><summary>Xem danh sách tất cả repository được kiểm tra</summary>', '',
+             '| Repository | Repository & LFS | Wiki | Kết quả |', '|---|---|---|---|']
+    for entry in selected:
+        name = entry['target']
+        rep = reports.get(name, {})
+        status = rep.get('status', 'CHƯA XÁC MINH')
+        rows.append(f'| `{safe_md(name)}` | {safe_md((rep.get("repository") or {}).get("status", "Không có report"))} '
+                    f'| {safe_md((rep.get("wiki") or {}).get("status", "Không có report"))} | {glyph(status)} **{status}** |')
+    rows += ['', '</details>', '',
+             '> Khi ref lệch, LFS có thể chưa được kiểm tra. Đọc Summary của từng job `Restore ...` '
+             'để xem SHA, thời gian commit, và bảng chi tiết; JSON artifact lưu toàn bộ kết quả.']
+    return '\n'.join(rows) + '\n', ok
 
 def main():
     p = argparse.ArgumentParser()
@@ -419,7 +545,7 @@ def main():
                 try:
                     report[kind] = one_kind(source, dest, root, kind, lfs, is_wiki=(kind == 'wiki'))
                 except RefMismatch as e:
-                    report[kind] = {'status': e.status, 'error': str(e), 'issues': e.issues,
+                    report[kind] = {'status': e.status, 'stage': 'Branches / Tags', 'error': str(e), 'issues': e.issues,
                                     'note': 'Refs chưa khớp. Git fsck đã chạy; LFS chưa kiểm tra trong lượt này.'}
                     ok = False
                     print(f'::warning title={args.target} {kind}: {e.status}::{len(e.issues)} ref khác nhau; xem Summary/JSON.', flush=True)
@@ -427,15 +553,15 @@ def main():
                         print(f'  {item["kind"]}: {item["ref"]} GitHub={short_oid(item.get("github_sha"))} '
                               f'GitLab={short_oid(item.get("gitlab_sha"))} — {item["reason"]}', flush=True)
                 except MissingLfs as e:
-                    report[kind] = {'status': 'THIẾU LFS', 'error': str(e)}
+                    report[kind] = {'status': 'THIẾU LFS', 'error': str(e), 'stage': 'Git LFS', 'missing_oids': e.oids}
                     ok = False
                     print(f'::error title={args.target} {kind}: thiếu LFS::{str(e)}', flush=True)
                 except SnapshotChanged as e:
-                    report[kind] = {'status': 'CHƯA XÁC MINH', 'error': str(e), 'snapshot_changes': e.changes}
+                    report[kind] = {'status': 'CHƯA XÁC MINH', 'stage': 'Kiểm tra snapshot', 'error': str(e), 'snapshot_changes': e.changes}
                     ok = False
                     print(f'::warning title={args.target} {kind}: nguồn thay đổi::{str(e)}', flush=True)
                 except DataCorruption as e:
-                    report[kind] = {'status': 'LỖI DỮ LIỆU', 'error': str(e)}
+                    report[kind] = {'status': 'LỖI DỮ LIỆU', 'stage': 'Git fsck' if str(e).startswith('Git object') else 'Git LFS SHA-256', 'error': str(e)}
                     ok = False
                     print(f'::error title={args.target} {kind}: lỗi dữ liệu::{str(e)}', flush=True)
                 except VerificationError as e:

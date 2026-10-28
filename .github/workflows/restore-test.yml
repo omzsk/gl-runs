@@ -83,7 +83,7 @@ jobs:
 
   verify:
     needs: prepare
-    name: Kiểm tra ${{ matrix.target }}
+    name: Restore ${{ matrix.target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
@@ -164,12 +164,17 @@ jobs:
           retention-days: 30
 
   summary:
-    name: Tổng hợp kết quả tiếng Việt
+    name: Tổng hợp Restore Test — tiếng Việt
     needs: [prepare, verify]
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Tải kết quả từng repository
+      - name: Checkout script báo cáo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Tải JSON của từng repository
         if: ${{ needs.prepare.result == 'success' }}
         uses: actions/download-artifact@v4
         continue-on-error: true
@@ -178,7 +183,7 @@ jobs:
           path: restore-results
           merge-multiple: true
 
-      - name: Hiện summary tiếng Việt và báo Failed nếu kiểm tra chưa đạt
+      - name: Tổng hợp dạng ngắn, lỗi được giải thích cụ thể
         shell: bash
         env:
           MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
@@ -186,81 +191,27 @@ jobs:
           VERIFY_STATUS: ${{ needs.verify.result }}
         run: |
           python3 - <<'PY'
-          import glob, json, os, sys
+          import glob
+          import json
+          import os
           from pathlib import Path
+          import sys
+          sys.path.insert(0, str(Path('scripts').resolve()))
+          from verify_restore_full import render_aggregate_summary
+
           selected = json.loads(os.environ.get('MATRIX_JSON') or '{}').get('include', [])
           reports = {}
           for file in glob.glob('restore-results/*.json'):
               try:
-                  data = json.loads(Path(file).read_text(encoding='utf-8'))
-                  reports[data['target']] = data
+                  report = json.loads(Path(file).read_text(encoding='utf-8'))
+                  reports[report['target']] = report
               except (OSError, KeyError, ValueError):
                   pass
-          rows = ['## Báo cáo Full Restore Test — GitHub ↔ GitLab', '',
-                  '| Repository | Git và LFS | Wiki | Kết luận |', '|---|---|---|---|']
-          passed = 0
-          counts = {}
-          for entry in selected:
-              name = entry['target']
-              item = reports.get(name, {})
-              status = item.get('status', 'CHƯA XÁC MINH')
-              counts[status] = counts.get(status, 0) + 1
-              if status == 'ĐẠT':
-                  passed += 1
-              rows.append(f'| `{name}` | {item.get("repository", {}).get("status", "KHÔNG CÓ BÁO CÁO")} '
-                          f'| {item.get("wiki", {}).get("status", "KHÔNG CÓ BÁO CÁO")} | **{status}** |')
-          rows += ['', f'**ĐẠT: {passed}/{len(selected)} repository được chọn.**', '',
-                   '**Thống kê theo nguyên nhân:** ' + '; '.join(f'{key}: {value}' for key, value in sorted(counts.items())),
-                   f'Workflow chuẩn bị: `{os.environ["PREPARE_STATUS"]}`; '
-                   f'kiểm tra: `{os.environ["VERIFY_STATUS"]}`.', '']
-          def esc(s):
-              return str(s).replace('|', chr(92) + '|').replace('\n', ' ').replace('\r', ' ')[:350]
-          def sha(value):
-              return str(value)[:12] if value else '—'
-          # Aggregate diagnostics, so users don't need to open 64 separate matrix-job summaries.
-          for entry in selected:
-              name = entry['target']
-              item = reports.get(name, {})
-              if item.get('status') == 'ĐẠT':
-                  continue
-              rows += [f'### {esc(name)} — {item.get("status", "CHƯA XÁC MINH")}', '']
-              rows.append(f'Thời điểm bắt đầu kiểm tra (UTC): `{item.get("time_utc", "không có báo cáo")}`. ')
-              if not item:
-                  rows.append('Không có JSON report. Xem log matrix job, lỗi runner hoặc upload artifact.')
-                  continue
-              for key, label in [('repository', 'Repository'), ('wiki', 'Wiki')]:
-                  section = item.get(key, {})
-                  if section.get('status') in ('ĐẠT', 'BỎ QUA', 'KHÔNG CÓ'):
-                      continue
-                  rows += [f'**{label}: {esc(section.get("status", "CHƯA XÁC MINH"))}** — '
-                           f'{esc(section.get("error", "Không có thông báo lỗi chi tiết"))}', '']
-                  issues = section.get('issues') or []
-                  if issues:
-                      rows += [f'{len(issues)} ref khác nhau (hiển thị tối đa 10, toàn bộ trong JSON artifact):', '',
-                               '| Ref | Nguyên nhân | GitHub SHA / commit UTC | GitLab SHA / commit UTC |',
-                               '|---|---|---|---|']
-                      for problem in issues[:10]:
-                          gh = problem.get('github') or {}
-                          gl = problem.get('gitlab') or {}
-                          reason = problem.get('reason', '')
-                          rows.append(f'| `{esc(problem["ref"])}` | {esc(problem["kind"] + ": " + reason)} '
-                                      f'| `{sha(problem.get("github_sha"))}` / `{gh.get("commit_time") or "—"}` '
-                                      f'| `{sha(problem.get("gitlab_sha"))}` / `{gl.get("commit_time") or "—"}` |')
-                      rows.append('')
-                  for change in (section.get('snapshot_changes') or [])[:10]:
-                      rows.append(f'- Ref đổi trong lúc test: `{esc(change["ref"])}`: '
-                                  f'`{sha(change.get("old"))}` → `{sha(change.get("new"))}`')
-          rows += ['', '**Diễn giải:** `CHƯA ĐỒNG BỘ` = GitLab đang ở commit tổ tiên của GitHub, '
-                   'không đồng nghĩa corrupt. `LỆCH REFS` = có nhánh/tag không khớp, cần xem nguyên nhân. '
-                   '`THIẾU LFS` = chưa khôi phục đủ object LFS. `LỖI DỮ LIỆU` = Git fsck hoặc SHA-256 phát hiện lỗi. '
-                   '`CHƯA XÁC MINH` = nguồn/đích thay đổi khi test, lỗi mạng/rate limit, hoặc chưa kiểm tra xong.', '',
-                   '> Thời gian hiển thị của ref là **committer date**, không phải giờ push/backup. '
-                   'Kiểm tra so sánh dữ liệu tại snapshot quan sát, không bao gồm Issues/PR/Releases/metadata. '
-                   'Repo có thể bị lệch do lịch backup 6 giờ chưa kịp chạy; xem JSON artifact để xác minh.', '']
-          text = '\n'.join(rows)
-          print(text)
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as out:
-              out.write(text)
+          markdown, passed = render_aggregate_summary(
+              selected, reports, os.environ['PREPARE_STATUS'], os.environ['VERIFY_STATUS'])
+          print(markdown)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write(markdown)
           if not selected or passed != len(selected) or os.environ['VERIFY_STATUS'] != 'success':
-              sys.exit('Full Restore Test: một hoặc nhiều repository chưa ĐẠT')
+              sys.exit('Restore Test: có ít nhất một repository chưa ĐẠT; xem Summary tiếng Việt.')
           PY
