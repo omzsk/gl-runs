@@ -9,9 +9,9 @@ Mỗi job có tên **Restore <tên-repository>** và Summary dạng dòng ngắn
 - **Wiki:** PASS / KHÔNG CÓ / BỎ QUA / có lỗi
 - **Kết luận:** ĐẠT hoặc chưa đạt, không gán nhầm corrupt khi chỉ có commit mới.
 
-Khi có khác biệt, ngay dưới các dòng trên sẽ xuất hiện phần **Chi tiết lỗi**: hạng mục/bước, tên ref, loại sai khác, SHA GitHub/GitLab, số commit chậm, thời gian commit (trong bảng mở rộng), thông báo lỗi Git/LFS, OID bị thiếu, và gợi ý xử lý. Bảng dài đặt trong mục mở rộng để Summary gọn. JSON artifact giữ toàn bộ chi tiết trong 30 ngày.
+Khi có khác biệt, ngay dưới các dòng trên sẽ xuất hiện phần **Chi tiết lỗi**: hạng mục/bước, tên ref, loại sai khác, SHA GitHub/GitLab, số commit chậm, thời gian commit (trong bảng mở rộng), thông báo lỗi Git/LFS, OID bị thiếu, và gợi ý xử lý. Bảng dài đặt trong mục mở rộng để Summary gọn. Không tạo/upload GitHub Actions artifact. Thay vào đó, Summary của từng job hiển thị các lỗi chính; log của job ghi đầy đủ refs lệch và LFS OID thiếu.
 
-Job **Tổng hợp Restore Test — tiếng Việt** hiển thị số repo ĐẠT, CHƯA ĐỒNG BỘ, LỆCH REFS, THIẾU LFS, LỖI DỮ LIỆU, CHƯA XÁC MINH; đồng thời có mô tả lỗi theo repository và danh sách đầy đủ có thể mở rộng.
+Job **Tổng hợp Restore Test — không dùng Artifact** hiển thị bảng toàn bộ repo, trạng thái job thành công/thất bại và liên kết tới job tương ứng. Vì không chuyển JSON giữa các job, Summary tổng hợp **không thể phân loại chính xác** CHƯA ĐỒNG BỘ/LỆCH REFS/THIẾU LFS; các trạng thái này vẫn hiển thị chi tiết ở Summary của từng job. Báo cáo tổng hợp lấy trạng thái job từ GitHub Actions API (quyền `actions: read`), không upload file báo cáo.
 
 ## Cập nhật
 
@@ -19,6 +19,7 @@ Chỉ cần thay hai file sau trong repository GitHub Actions đang backup:
 
 1. `.github/workflows/restore-test.yml`
 2. `scripts/verify_restore_full.py`
+3. `scripts/restore_summary_jobs.py` (file mới, bắt buộc)
 
 Giữ nguyên `.github/workflows/sync.yml`, `repos`, `scripts/parse_repos.py`, và `GITLAB_TOKEN`, `GITLAB_NAMESPACE`, `GITLAB_HOST`. Không cần thay workflow backup. Workflow test chỉ đọc GitHub/GitLab; không push hoặc xóa dữ liệu.
 
@@ -49,3 +50,10 @@ Chạy tại **GitHub → Actions → GitLab Full Restore Test → Run workflow*
 ## Test cục bộ
 
 Hai test đi kèm: `tests/test_full_local.py` kiểm tra Git refs/fsck và mô phỏng mạng LFS; `tests/test_report_readable.py` kiểm tra văn bản Summary khi PASS, lệch refs, thiếu LFS, snapshot thay đổi và tổng hợp. Không có xác minh live GitLab trong test cục bộ.
+
+## Lưu trữ GitHub Actions
+
+Workflow không dùng `actions/upload-artifact` hoặc `actions/download-artifact`.
+File JSON kiểm tra chỉ tồn tại tạm thời trong `$RUNNER_TEMP` và bị xoá khi runner kết thúc;
+không tính là GitHub Actions artifact. Log và Step Summary vẫn được GitHub giữ lại theo chính sách retention, và phút chạy private runner không thay đổi vì bỏ artifact.
+Job tổng hợp cần GitHub Actions API; nếu API không khả dụng, bảng ghi `CHƯA XÁC MINH` và workflow báo lỗi thay vì báo PASS nhầm.

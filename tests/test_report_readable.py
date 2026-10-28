@@ -54,12 +54,5 @@ new_source={**ok,'status':'CHƯA XÁC MINH','repository': {
 }}
 assert 'Ref đổi trong khi test' in mod.render_summary(new_source)
 
-all_summary, count = mod.render_aggregate_summary(
-    [{'target':'KernelSU_tiann'}, {'target':'repo_good'}, {'target':'repo_not_reported'}],
-    {'KernelSU_tiann':behind, 'repo_good':ok}, 'success', 'failure')
-assert count == 1
-assert '1/3 repository ĐẠT' in all_summary
-assert 'Không tìm thấy JSON report' in all_summary
-assert 'refs/heads/main' in all_summary
-assert '<details>' in all_summary
+assert "JSON artifact" not in mod.render_summary(behind)
 print('Vietnamese concise summary tests PASSED')

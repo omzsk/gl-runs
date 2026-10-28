@@ -152,66 +152,30 @@ jobs:
             --lfs "$WITH_LFS" \
             --wiki "$WITH_WIKI" \
             --wiki-lfs "$WITH_WIKI_LFS" \
-            --report "restore-results/${TARGET}.json"
-
-      - name: Lưu JSON báo cáo (kể cả khi test thất bại)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: restore-report-${{ matrix.target }}
-          path: restore-results/*.json
-          if-no-files-found: warn
-          retention-days: 30
+            --report "$RUNNER_TEMP/restore-results/${TARGET}.json"
 
   summary:
-    name: Tổng hợp Restore Test — tiếng Việt
+    name: Tổng hợp Restore Test — không dùng Artifact
     needs: [prepare, verify]
     if: always()
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read  # Chỉ đọc trạng thái các job của workflow này qua GitHub API
     steps:
       - name: Checkout script báo cáo
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Tải JSON của từng repository
-        if: ${{ needs.prepare.result == 'success' }}
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          pattern: restore-report-*
-          path: restore-results
-          merge-multiple: true
-
-      - name: Tổng hợp dạng ngắn, lỗi được giải thích cụ thể
+      - name: Tổng hợp trạng thái từng job (không lưu Artifact)
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
           MATRIX_JSON: ${{ needs.prepare.outputs.matrix }}
           PREPARE_STATUS: ${{ needs.prepare.result }}
           VERIFY_STATUS: ${{ needs.verify.result }}
-        run: |
-          python3 - <<'PY'
-          import glob
-          import json
-          import os
-          from pathlib import Path
-          import sys
-          sys.path.insert(0, str(Path('scripts').resolve()))
-          from verify_restore_full import render_aggregate_summary
-
-          selected = json.loads(os.environ.get('MATRIX_JSON') or '{}').get('include', [])
-          reports = {}
-          for file in glob.glob('restore-results/*.json'):
-              try:
-                  report = json.loads(Path(file).read_text(encoding='utf-8'))
-                  reports[report['target']] = report
-              except (OSError, KeyError, ValueError):
-                  pass
-          markdown, passed = render_aggregate_summary(
-              selected, reports, os.environ['PREPARE_STATUS'], os.environ['VERIFY_STATUS'])
-          print(markdown)
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
-              output.write(markdown)
-          if not selected or passed != len(selected) or os.environ['VERIFY_STATUS'] != 'success':
-              sys.exit('Restore Test: có ít nhất một repository chưa ĐẠT; xem Summary tiếng Việt.')
-          PY
+        run: python3 scripts/restore_summary_jobs.py
