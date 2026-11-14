@@ -467,11 +467,12 @@ if [[ "$kind" == repository && "$API_ENABLED" == true ]] &&
    git show-ref -q --verify "refs/tags/$default" &&
    [[ -z "${old_tags[$default]:-}" ]]; then
 
-  for ref in "${src_heads[@]}"; do
-    candidate="${ref#refs/heads/}"
-
+  # Prefer main, then master as temporary default branch.
+  for candidate in main master; do
     if [[ "$candidate" != "$default" ]] &&
+       git show-ref -q --verify "refs/heads/$candidate" &&
        ! git show-ref -q --verify "refs/tags/$candidate"; then
+  
       temporary_default="$candidate"
       break
     fi
