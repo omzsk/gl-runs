@@ -460,7 +460,35 @@ mirror_git() (
   dest_git push --atomic "${update_leases[@]}" destination "${update_specs[@]}"
 
   # Changing the default is only possible after the wanted branch exists.
+# Fix GitLab default branch / tag name collision.
+temporary_default=""
+
+if [[ "$kind" == repository && "$API_ENABLED" == true ]] &&
+   git show-ref -q --verify "refs/tags/$default" &&
+   [[ -z "${old_tags[$default]:-}" ]]; then
+
+  for ref in "${src_heads[@]}"; do
+    candidate="${ref#refs/heads/}"
+
+    if [[ "$candidate" != "$default" ]] &&
+       ! git show-ref -q --verify "refs/tags/$candidate"; then
+      temporary_default="$candidate"
+      break
+    fi
+  done
+
+  [[ -n "$temporary_default" ]] ||
+    fail "Cannot create default-name tag: no alternative branch available."
+
+  notice "Temporary GitLab default: $temporary_default"
+
+  # Restore source default on error as well.
+  trap 'set_destination_default repository "$default" || true' EXIT
+
+  set_destination_default "$kind" "$temporary_default"
+else
   set_destination_default "$kind" "$default"
+fi
 
   # Some forges may report a new default in their API while the bare Git
   # remote still advertises the old HEAD. Never attempt to delete that HEAD.
@@ -496,6 +524,13 @@ mirror_git() (
   done
   if (( ${#delete_specs[@]} > 0 )); then
     dest_git push --atomic "${delete_leases[@]}" destination "${delete_specs[@]}"
+  fi
+
+  # Restore original default branch after tag synchronization.
+  if [[ -n "$temporary_default" ]]; then
+    notice "Restoring GitLab default branch: $default"
+    set_destination_default "$kind" "$default"
+    trap - EXIT
   fi
 
   # A successful git push alone does not prove that every expected ref is
